@@ -85,6 +85,10 @@ def main() -> None:
     match_name_field = resolve_property(sample, MATCH_NAME_FIELD)
     match_email_field = resolve_property(sample, MATCH_EMAIL_FIELD)
     colour_name_field = resolve_property(sample, COLOUR_NAME_FIELD)
+    title_fields = [name for name, prop in sample.items() if prop["type"] == "title"]
+    if len(title_fields) != 1:
+        raise RuntimeError("The database must have exactly one Title property.")
+    title_field = title_fields[0]
     colour_type = sample[colour_name_field]["type"]
     if colour_type not in {"title", "rich_text"}:
         raise RuntimeError(f"{COLOUR_NAME_FIELD} must be a Title or Text property.")
@@ -101,16 +105,22 @@ def main() -> None:
 
     changed = 0
     for page in pages:
-        name = text(page["properties"][colour_name_field])
         target_colour = "red" if page["id"] in duplicate_ids else "default"
-        name_parts = page["properties"][colour_name_field][colour_type]
-        current_colours = [part.get("annotations", {}).get("color", "default") for part in name_parts]
-        if name_parts and all(colour == target_colour for colour in current_colours):
+        updates = {}
+        for field in {title_field, colour_name_field}:
+            prop = page["properties"][field]
+            prop_type = prop["type"]
+            name_parts = prop[prop_type]
+            current_colours = [part.get("annotations", {}).get("color", "default") for part in name_parts]
+            if name_parts and all(colour == target_colour for colour in current_colours):
+                continue
+            updates[field] = {prop_type: [{
+                "type": "text", "text": {"content": text(prop)},
+                "annotations": {"bold": False, "italic": False, "strikethrough": False, "underline": False, "code": False, "color": target_colour},
+            }]}
+        if not updates:
             continue
-        call("PATCH", f"/pages/{page['id']}", {"properties": {colour_name_field: {colour_type: [{
-            "type": "text", "text": {"content": name},
-            "annotations": {"bold": False, "italic": False, "strikethrough": False, "underline": False, "code": False, "color": target_colour},
-        }]}}})
+        call("PATCH", f"/pages/{page['id']}", {"properties": updates})
         changed += 1
         time.sleep(0.35)
 
