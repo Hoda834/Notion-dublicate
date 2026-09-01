@@ -16,6 +16,11 @@ DATABASE_ID = "3bbf7394-9b79-8041-8896-ebdbbbbbf2b1"
 API_VERSION = "2025-09-03"
 TOKEN = os.environ["NOTION_TOKEN"]
 
+# Explicit fields from your Candidate Tracker.
+MATCH_NAME_FIELD = "Original Given Name"
+MATCH_EMAIL_FIELD = "Email"
+COLOUR_NAME_FIELD = "DiA Staff Name"
+
 
 def call(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     data = json.dumps(body).encode() if body else None
@@ -66,28 +71,33 @@ def main() -> None:
         return
 
     sample = pages[0]["properties"]
-    title_fields = [name for name, prop in sample.items() if prop["type"] == "title"]
-    email_fields = [name for name, prop in sample.items() if prop["type"] == "email"]
-    if len(title_fields) != 1 or len(email_fields) != 1:
-        raise RuntimeError("The database needs exactly one Title property and one Email property.")
-    name_field, email_field = title_fields[0], email_fields[0]
+    required = {MATCH_NAME_FIELD, MATCH_EMAIL_FIELD, COLOUR_NAME_FIELD}
+    missing = required - set(sample)
+    if missing:
+        raise RuntimeError("Missing Notion property/properties: " + ", ".join(sorted(missing)))
+    colour_type = sample[COLOUR_NAME_FIELD]["type"]
+    if colour_type not in {"title", "rich_text"}:
+        raise RuntimeError(f"{COLOUR_NAME_FIELD} must be a Title or Text property.")
 
     grouped = defaultdict(list)
     for page in pages:
-        key = (clean(text(page["properties"][name_field])), clean(text(page["properties"][email_field])))
+        key = (
+            clean(text(page["properties"][MATCH_NAME_FIELD])),
+            clean(text(page["properties"][MATCH_EMAIL_FIELD])),
+        )
         if key[0] and key[1]:
             grouped[key].append(page)
     duplicate_ids = {page["id"] for group in grouped.values() if len(group) > 1 for page in group}
 
     changed = 0
     for page in pages:
-        name = text(page["properties"][name_field])
+        name = text(page["properties"][COLOUR_NAME_FIELD])
         target_colour = "red" if page["id"] in duplicate_ids else "default"
-        title_parts = page["properties"][name_field]["title"]
-        current_colours = [part.get("annotations", {}).get("color", "default") for part in title_parts]
-        if title_parts and all(colour == target_colour for colour in current_colours):
+        name_parts = page["properties"][COLOUR_NAME_FIELD][colour_type]
+        current_colours = [part.get("annotations", {}).get("color", "default") for part in name_parts]
+        if name_parts and all(colour == target_colour for colour in current_colours):
             continue
-        call("PATCH", f"/pages/{page['id']}", {"properties": {name_field: {"title": [{
+        call("PATCH", f"/pages/{page['id']}", {"properties": {COLOUR_NAME_FIELD: {colour_type: [{
             "type": "text", "text": {"content": name},
             "annotations": {"bold": False, "italic": False, "strikethrough": False, "underline": False, "code": False, "color": target_colour},
         }]}}})
