@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Colour Notion names red where both name and email are duplicated."""
+"""Mark Notion records where both name and email are duplicated."""
 
 import json
 import os
@@ -17,9 +17,10 @@ API_VERSION = "2025-09-03"
 TOKEN = os.environ["NOTION_TOKEN"]
 
 # Explicit fields from your Candidate Tracker.
-MATCH_NAME_FIELD = "Original Given Name"
+MATCH_NAME_FIELD = "DiA Staff Name"
 MATCH_EMAIL_FIELD = "Email"
-COLOUR_NAME_FIELD = "DiA Staff Name"
+DUPLICATE_FIELD = "Duplicate"
+DUPLICATE_OPTION = "Duplicate"
 
 
 def call(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -84,14 +85,9 @@ def main() -> None:
     sample = pages[0]["properties"]
     match_name_field = resolve_property(sample, MATCH_NAME_FIELD)
     match_email_field = resolve_property(sample, MATCH_EMAIL_FIELD)
-    colour_name_field = resolve_property(sample, COLOUR_NAME_FIELD)
-    title_fields = [name for name, prop in sample.items() if prop["type"] == "title"]
-    if len(title_fields) != 1:
-        raise RuntimeError("The database must have exactly one Title property.")
-    title_field = title_fields[0]
-    colour_type = sample[colour_name_field]["type"]
-    if colour_type not in {"title", "rich_text"}:
-        raise RuntimeError(f"{COLOUR_NAME_FIELD} must be a Title or Text property.")
+    duplicate_field = resolve_property(sample, DUPLICATE_FIELD)
+    if sample[duplicate_field]["type"] != "select":
+        raise RuntimeError(f"{DUPLICATE_FIELD} must be a Select property.")
 
     grouped = defaultdict(list)
     for page in pages:
@@ -105,27 +101,19 @@ def main() -> None:
 
     changed = 0
     for page in pages:
-        target_colour = "red" if page["id"] in duplicate_ids else "default"
-        updates = {}
-        for field in {title_field, colour_name_field}:
-            prop = page["properties"][field]
-            prop_type = prop["type"]
-            name_parts = prop[prop_type]
-            current_colours = [part.get("annotations", {}).get("color", "default") for part in name_parts]
-            if name_parts and all(colour == target_colour for colour in current_colours):
-                continue
-            updates[field] = {prop_type: [{
-                "type": "text", "text": {"content": text(prop)},
-                "annotations": {"bold": False, "italic": False, "strikethrough": False, "underline": False, "code": False, "color": target_colour},
-            }]}
-        if not updates:
+        target_option = DUPLICATE_OPTION if page["id"] in duplicate_ids else None
+        current_option = page["properties"][duplicate_field].get("select")
+        current_name = current_option.get("name") if current_option else None
+        if current_name == target_option:
             continue
-        call("PATCH", f"/pages/{page['id']}", {"properties": updates})
+        call("PATCH", f"/pages/{page['id']}", {
+            "properties": {duplicate_field: {"select": {"name": target_option} if target_option else None}}
+        })
         changed += 1
         time.sleep(0.35)
 
     groups = sum(len(group) > 1 for group in grouped.values())
-    print(f"Checked {len(pages)} records. {len(duplicate_ids)} names are red across {groups} duplicate groups. Updated {changed} names.")
+    print(f"Checked {len(pages)} records. Marked {len(duplicate_ids)} records across {groups} duplicate groups. Updated {changed} records.")
 
 
 if __name__ == "__main__":
