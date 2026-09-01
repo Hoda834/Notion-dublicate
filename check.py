@@ -51,6 +51,17 @@ def clean(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().strip().split())
 
 
+def resolve_property(properties: dict[str, Any], wanted: str) -> str:
+    """Find a property even if Notion's stored name has invisible spacing."""
+    wanted_key = "".join(char for char in clean(wanted) if char.isalnum())
+    for actual_name in properties:
+        actual_key = "".join(char for char in clean(actual_name) if char.isalnum())
+        if actual_key == wanted_key:
+            return actual_name
+    available = ", ".join(repr(name) for name in properties)
+    raise RuntimeError(f"Cannot find {wanted!r}. Available properties: {available}")
+
+
 def main() -> None:
     database = call("GET", f"/databases/{DATABASE_ID}")
     data_sources = database.get("data_sources", [])
@@ -71,19 +82,18 @@ def main() -> None:
         return
 
     sample = pages[0]["properties"]
-    required = {MATCH_NAME_FIELD, MATCH_EMAIL_FIELD, COLOUR_NAME_FIELD}
-    missing = required - set(sample)
-    if missing:
-        raise RuntimeError("Missing Notion property/properties: " + ", ".join(sorted(missing)))
-    colour_type = sample[COLOUR_NAME_FIELD]["type"]
+    match_name_field = resolve_property(sample, MATCH_NAME_FIELD)
+    match_email_field = resolve_property(sample, MATCH_EMAIL_FIELD)
+    colour_name_field = resolve_property(sample, COLOUR_NAME_FIELD)
+    colour_type = sample[colour_name_field]["type"]
     if colour_type not in {"title", "rich_text"}:
         raise RuntimeError(f"{COLOUR_NAME_FIELD} must be a Title or Text property.")
 
     grouped = defaultdict(list)
     for page in pages:
         key = (
-            clean(text(page["properties"][MATCH_NAME_FIELD])),
-            clean(text(page["properties"][MATCH_EMAIL_FIELD])),
+            clean(text(page["properties"][match_name_field])),
+            clean(text(page["properties"][match_email_field])),
         )
         if key[0] and key[1]:
             grouped[key].append(page)
@@ -91,13 +101,13 @@ def main() -> None:
 
     changed = 0
     for page in pages:
-        name = text(page["properties"][COLOUR_NAME_FIELD])
+        name = text(page["properties"][colour_name_field])
         target_colour = "red" if page["id"] in duplicate_ids else "default"
-        name_parts = page["properties"][COLOUR_NAME_FIELD][colour_type]
+        name_parts = page["properties"][colour_name_field][colour_type]
         current_colours = [part.get("annotations", {}).get("color", "default") for part in name_parts]
         if name_parts and all(colour == target_colour for colour in current_colours):
             continue
-        call("PATCH", f"/pages/{page['id']}", {"properties": {COLOUR_NAME_FIELD: {colour_type: [{
+        call("PATCH", f"/pages/{page['id']}", {"properties": {colour_name_field: {colour_type: [{
             "type": "text", "text": {"content": name},
             "annotations": {"bold": False, "italic": False, "strikethrough": False, "underline": False, "code": False, "color": target_colour},
         }]}}})
